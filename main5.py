@@ -1,72 +1,90 @@
-import os
+import requests
+from bs4 import BeautifulSoup
 import json
+import os
 
-# Данные о продуктах (предположим, это результат предыдущего парсинга)
-products = [
-    {
-        "Название": "PORGELAIN ETCHANT 9.5%",
-        "Описание": "Протравка для фарфора с 9,5% буферной плавиковой кислоты.",
-        "Цена": 1250,
-        "Единица измерения": "уп",
-        "Наличие": "да"
-    },
-    {
-        "Название": "Адгезив DiaPlus, DiaDent",
-        "Описание": "Однокомпонентное вещество с высокой силой сцепления.",
-        "Цена": 789,
-        "Единица измерения": "шт",
-        "Наличие": "да"
-    },
-    {
-        "Название": "Adhesive UNI Bond",
-        "Описание": "Универсальный адгезив для стоматологических реставраций.",
-        "Цена": 2300,
-        "Единица измерения": "шт",
-        "Наличие": "нет"
-    },
-    {
-        "Название": "Adhesive Clearfil",
-        "Описание": "Эффективен для работы с керамическими материалами.",
-        "Цена": 1141,
-        "Единица измерения": "шт",
-        "Наличие": "да"
-    }
-]
 
-# Создание папки для результатов
+# Функция для скачивания страницы
+def download_page(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Проверка на ошибки HTTP
+        return response.text
+    except Exception as e:
+        print(f"Ошибка при скачивании страницы: {e}")
+        return None
+
+
+# Основная функция
+catalog_url = "https://ekb.arendacar.ru/"  # Укажите правильный URL каталога
+
+# Создаем папку для сохранения данных
 output_folder = "задание5"
 os.makedirs(output_folder, exist_ok=True)
 
-# 1. Сортировка по цене
-sorted_products = sorted(products, key=lambda x: x['Цена'] if x['Цена'] else 0)
-with open(os.path.join(output_folder, "sorted_products.json"), "w", encoding="utf-8") as file:
-    json.dump(sorted_products, file, ensure_ascii=False, indent=4)
 
-# 2. Фильтрация по наличию
-filtered_products = [product for product in products if product['Наличие'] == 'да']
-with open(os.path.join(output_folder, "filtered_products.json"), "w", encoding="utf-8") as file:
-    json.dump(filtered_products, file, ensure_ascii=False, indent=4)
+# Функция для извлечения данных и сохранения в файл
+def scrape_and_save(catalog_url):
+    print("Скачивание страницы каталога...")
+    html_content = download_page(catalog_url)
 
-# 3. Статистика по цене
-prices = [product['Цена'] for product in products if product['Цена']]
-price_stats = {
-    "Сумма": sum(prices),
-    "Минимум": min(prices),
-    "Максимум": max(prices),
-    "Среднее": sum(prices) / len(prices) if prices else 0,
-    "Количество записей": len(prices)
-}
-with open(os.path.join(output_folder, "price_stats.json"), "w", encoding="utf-8") as file:
-    json.dump(price_stats, file, ensure_ascii=False, indent=4)
+    if html_content:
+        # Парсим страницу с помощью BeautifulSoup
+        soup = BeautifulSoup(html_content, "html.parser")
 
-# 4. Частота меток по единицам измерения
-unit_counts = {}
-for product in products:
-    unit = product['Единица измерения']
-    if unit:
-        unit_counts[unit] = unit_counts.get(unit, 0) + 1
+        # Ищем все элементы с классом 'main-top-cars__item'
+        main_top_cars_items = soup.find_all("div", class_="main-top-cars__item")
 
-with open(os.path.join(output_folder, "unit_counts.json"), "w", encoding="utf-8") as file:
-    json.dump(unit_counts, file, ensure_ascii=False, indent=4)
+        # Если элементы найдены, извлекаем нужную информацию
+        if main_top_cars_items:
+            products = []
+            for item in main_top_cars_items:
+                # Извлекаем информацию из блока cars-item-2__info
+                info_block = item.find("div", class_="cars-item-2__info")
+                if info_block:
+                    # Извлекаем название автомобиля
+                    name = info_block.find("span", class_="cars-item-2__heading").text.strip()
+                    # Извлекаем тип автомобиля
+                    status = info_block.find("div", class_="cars-item-2__status").text.strip()
 
-print(f"Результаты сохранены в папку: {output_folder}")
+                    # Извлекаем параметры автомобиля
+                    params = {}
+                    param_elements = info_block.find_all("div", class_="cars-item-2__param")
+                    for param in param_elements:
+                        label = param.find("div", class_="cars-item-2__param_label").text.strip()
+                        value = param.find("div", class_="cars-item-2__param_value").text.strip()
+                        params[label] = value
+
+                    # Извлекаем цену из блока cars-item-2-control__price
+                    price_block = item.find("div", class_="cars-item-2-control__price")
+                    if price_block:
+                        # Извлекаем цену из атрибута data-price
+                        price_data = price_block.get("data-price")
+                        if price_data:
+                            price_list = json.loads(price_data)
+                            for price_info in price_list:
+                                if price_info.get("days_min") == 30 and price_info.get("days_max") == 999:
+                                    price_value = price_info.get("price", "Цена не найдена")
+
+                                    # Добавляем данные в список
+                                    products.append({
+                                        "Название": name,
+                                        "Тип авто": status,
+                                        "Параметры": params,
+                                        "Цена (в рублях)": price_value,
+                                        "Единица измерения": "руб."
+                                    })
+
+            # Сохраняем данные в файл
+            output_path = os.path.join(output_folder, "products.json")
+            with open(output_path, "w", encoding="utf-8") as file:
+                json.dump(products, file, ensure_ascii=False, indent=4)
+            print(f"Данные о товарах сохранены в {output_path}.")
+        else:
+            print("Не удалось найти элементы с классом 'main-top-cars__item'.")
+    else:
+        print("Не удалось скачать страницу.")
+
+
+# Вызов функции для скачивания и сохранения данных
+scrape_and_save(catalog_url)
